@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>不動産物件管理システム</title>
+<!-- Firebase SDK の追加 (バージョンを最新に) -->
+<script src="https://www.gstatic.com/firebasejs/9.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.8.0/firebase-firestore-compat.js"></script>
+<style>
+body { font-family: sans-serif; background: #f9f9f9; padding: 1em; }
+.tab { display: flex; margin-bottom: 1em; background: #ddd; border-radius: 6px; overflow: hidden; }
+.tab button { flex: 1; padding: 1em; border: none; background: #ccc; font-weight: bold; cursor: pointer; transition: background 0.3s; }
+.tab button.active { background: #2196F3; color: white; }
+.content { display: none; }
+.content.active { display: block; background: white; padding: 1em; border-radius: 6px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+.form-group { margin-bottom: 1em; display: flex; flex-direction: column; max-width: 400px; }
+input, select, button { padding: 0.5em; font-size: 1em; margin-top: 0.3em; }
+table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+th, td { border: 1px solid #ccc; padding: 0.5em; text-align: left; }
+th { background: #f0f0f0; }
+.highlight-button { background: #ff5722; color: white; border: none; padding: 0.6em 1em; font-size: 1em; cursor: pointer; border-radius: 4px; margin-top: 1em; }
+.search-form, .actions { display: flex; flex-wrap: wrap; gap: 1em; margin-bottom: 1em; }
+.search-form select, .search-form input { min-width: 150px; }
+.pagination { display: flex; justify-content: center; margin-top: 1em; gap: 0.5em; }
+.pagination button { padding: 0.5em 1em; border: 1px solid #ccc; background: #f9f9f9; cursor: pointer; border-radius: 4px; }
+.pagination button.active { background: #2196F3; color: white; border-color: #2196F3; }
+.pagination button:hover:not(.active) { background: #e0e0e0; }
+.pagination-info { text-align: center; margin-top: 1em; font-size: 0.9em; color: #666; }
+.loading { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+.loading-spinner { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<!-- ローディング表示 -->
+<div class="loading" id="loading">
+  <div class="loading-spinner"></div>
+</div>
+
+<div class="tab">
+  <button type="button" onclick="switchTab(0)" class="active">物件登録</button>
+  <button type="button" onclick="switchTab(1)">一覧・検索</button>
+  <button type="button" onclick="switchTab(2)">CSV管理</button>
+</div>
+
+<div class="content active" id="tab0">
+  <form id="propertyForm">
+    <div class="form-group">種別
+      <select name="type">
+        <option>土地</option><option>中古戸建</option><option>新築戸建</option>
+      </select>
+    </div>
+    <div class="form-group">物件名<input name="name"></div>
+    <div class="form-group">行政区
+      <select name="city">
+        <option>流山市</option><option>柏市</option><option>松戸市</option><option>船橋市</option><option>鎌ヶ谷市</option>
+      </select>
+    </div>
+    <div class="form-group">番地以下<input name="address_detail"></div>
+    <div class="form-group">価格<input name="price"></div>
+    <div class="form-group">土地面積<input name="land_area"></div>
+    <div class="form-group">建物面積<input name="building_area"></div>
+    <div class="form-group">媒体
+      <select name="media">
+        <option>レインズ</option><option>at-home</option><option>スーモ</option><option>不動産ジャパン</option>
+      </select>
+    </div>
+    <div class="form-group">業者名<input name="agency"></div>
+    <div class="form-group">電話番号<input name="phone"></div>
+    <div class="form-group">販売図面PDF<input type="file" name="pdf"></div>
+    <div class="form-group">販売状況
+      <select name="status">
+        <option>販売中</option><option>成約</option><option>売り止め</option>
+      </select>
+    </div>
+    <button type="button" onclick="registerProperty()">登録</button>
+  </form>
+</div>
+
+<div class="content" id="tab1">
+  <div class="search-form">
+    <select id="searchType"><option value="">種別</option><option>土地</option><option>中古戸建</option><option>新築戸建</option></select>
+    <select id="searchCity"><option value="">行政区</option><option>流山市</option><option>柏市</option><option>松戸市</option><option>船橋市</option><option>鎌ヶ谷市</option></select>
+    <input id="searchAddressDetail" placeholder="番地以下">
+    <input id="searchMin" placeholder="価格下限">
+    <input id="searchMax" placeholder="価格上限">
+    <input id="searchLandMin" placeholder="土地面積下限">
+    <input id="searchLandMax" placeholder="土地面積上限">
+    <select id="searchMedia"><option value="">媒体</option><option>レインズ</option><option>at-home</option><option>スーモ</option><option>不動産ジャパン</option></select>
+    <select id="searchStatus"><option value="">販売状況</option><option>販売中</option><option>成約</option><option>売り止め</option></select>
+    <button type="button" class="highlight-button" onclick="searchProperties()">検索</button>
+  </div>
+
+  <div class="actions">
+    <button type="button" onclick="bulkUpdate('販売中')">販売中</button>
+    <button type="button" onclick="bulkUpdate('成約')">成約</button>
+    <button type="button" onclick="bulkUpdate('売り止め')">売り止め</button>
+    <button type="button" onclick="bulkDelete()">削除</button>
+    <button type="button" onclick="exportCheckedCSV()" class="highlight-button">チェック物件をCSV出力</button>
+  </div>
+
+  <div class="pagination-info" id="paginationInfo">0件の物件が見つかりました</div>
+
+  <table id="propertyTable">
+    <thead>
+      <tr>
+        <th><input type="checkbox" onclick="toggleAll(this)"></th>
+        <th>種別</th>
+        <th>物件名</th>
+        <th>行政区</th>
+        <th>番地以下</th>
+        <th>価格</th>
+        <th>土地面積</th>
+        <th>建物面積</th>
+        <th>媒体</th>
+        <th>業者名</th>
+        <th>電話番号</th>
+        <th>PDF</th>
+        <th>販売状況</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div class="pagination" id="pagination"></div>
+</div>
+
+<div class="content" id="tab2">
+  <button type="button" onclick="exportRegisteredCSV()">登録物件CSV出力</button>
+  <button type="button" onclick="downloadCSVTemplate()">CSVひな形DL</button>
+  <input type="file" accept=".csv" id="csvFileInput">
+  <button type="button" onclick="importCSV()">CSV取込</button>
+  <button type="button" onclick="exportCSV()">CSV出力</button>
+  <button type="button" onclick="migrateLocalStorage()" style="margin-top: 20px; background-color: #4CAF50; color: white; padding: 10px;">LocalStorageからデータを移行</button>
+</div>
+
+<!-- Firebase の設定 -->
+<script>
+  // Firebase の初期化
+  const firebaseConfig = {
+    apiKey: "AIzaSyBRD0q2k6tZYQ3JgIa7tQA7PutW57rLDxw",
+    authDomain: "hotcia-bukken.firebaseapp.com",
+    projectId: "hotcia-bukken",
+    storageBucket: "hotcia-bukken.firebasestorage.app",
+    messagingSenderId: "109330289361",
+    appId: "1:109330289361:web:3c10b4e8375b1606186159"
+  };
+
+// Firebase の初期化
+  try {
+    firebase.initializeApp(firebaseConfig);
+    // Firestore への参照を取得
+    const db = firebase.firestore();
+    console.log("Firebase初期化成功");
+  } catch (error) {
+    console.error("Firebase初期化エラー:", error);
+    alert("Firebaseの初期化に失敗しました。ページを再読み込みしてください。");
+  }
+</script>
+
+<script>
+// グローバル変数
+let filteredData = []; // 検索結果データ
+let currentPage = 1;   // 現在のページ
+const itemsPerPage = 100; // 1ページあたりの表示件数
+let db; // Firestoreデータベース参照
+
+// Firebase 初期化
+function initializeFirebase() {
+  try {
+    firebase.initializeApp(firebaseConfig);
+    // Firestore への参照を取得
+    db = firebase.firestore();
+    console.log("Firebase初期化成功");
+    return true;
+  } catch (error) {
+    console.error("Firebase初期化エラー:", error);
+    alert("Firebaseの初期化に失敗しました。ページを再読み込みしてください。エラー: " + error.message);
+    return false;
+  }
+}
+
+// ローディング表示の制御
+function showLoading() {
+  document.getElementById('loading').style.display = 'flex';
+}
+
+function hideLoading() {
+  document.getElementById('loading').style.display = 'none';
+}
+
+// タブ切り替え機能
+function switchTab(index) {
+  const tabs = document.querySelectorAll('.tab button');
+  const contents = document.querySelectorAll('.content');
+  
+  for (let i = 0; i < tabs.length; i++) {
+    if (i === index) {
+      tabs[i].classList.add('active');
+      contents[i].classList.add('active');
+    } else {
+      tabs[i].classList.remove('active');
+      contents[i].classList.remove('active');
+    }
+  }
+  
+  // 一覧・検索タブに切り替わった場合は検索を実行
+  if (index === 1) {
+    searchProperties();
+  }
+}
+
+// 物件登録機能
+async function registerProperty() {
+  showLoading();
+  try {
+    const form = document.getElementById('propertyForm');
+    const formData = new FormData(form);
+    
+    // FormDataから通常のオブジェクトに変換
+    let newItem = {};
+    formData.forEach((value, key) => {
+      // FileListオブジェクトは直接保存できないので特別処理
+      if (value instanceof File) {
+        // 何もしない（ファイルは別途処理）
+      } else {
+        newItem[key] = value;
+      }
+    });
+    
+    // 登録日を追加（現在の日時をJST=日本時間で設定）
+    const now = new Date();
+    // 日本時間に調整（+9時間）
+    const jstDate = new Date(now.getTime() + (9 * 60 * 60 * 1000)); 
+    newItem.register_date = jstDate.toISOString().split('T')[0]; // YYYY-MM-DD形式
+    
+    // PDF処理
+    const fileInput = form.querySelector('input[name="pdf"]');
+    if (fileInput.files.length > 0) {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          newItem.pdf = reader.result;
+          
+          // データサイズが大きすぎる場合の処理
+          if (JSON.stringify(newItem).length > 1000000) {
+            // PDFのデータサイズが大きすぎる場合は参照のみ保存
+            newItem.pdf = '添付ファイルあり（サイズ制限のため本文は省略）';
+          }
+          
+          // Firestoreにデータを追加
+          await db.collection("properties").add(newItem);
+          form.reset();
+          alert('登録しました');
+        } catch (error) {
+          console.error("エラー:", error);
+          alert('登録に失敗しました: ' + error.message);
+        } finally {
+          hideLoading();
+        }
+      };
+      reader.readAsDataURL(fileInput.files[0]);
+    } else {
+      newItem.pdf = '';
+      
+      try {
+        // Firestoreにデータを追加
+        const docRef = await db.collection("properties").add(newItem);
+        console.log("ドキュメントを登録しました。ID:", docRef.id);
+        form.reset();
+        alert('登録しました');
+      } catch (error) {
+        console.error("エラー:", error);
+        alert('登録に失敗しました: ' + error.message);
+      } finally {
+        hideLoading();
+      }
+    }
+  } catch (error) {
+    console.error("登録エラー:", error);
+    alert('登録処理中にエラーが発生しました: ' + error.message);
+    hideLoading();
+  }
+}
+
+// LocalStorage からデータを移行する機能
+async function migrateLocalStorage() {
+  if (!confirm('LocalStorageからFirebaseにデータを移行しますか？\n(既に移行済みのデータは重複して登録されます)')) {
+    return;
+  }
+  
+  showLoading();
+  try {
+    const data = JSON.parse(localStorage.getItem('properties') || '[]');
+    
+    if (data.length === 0) {
+      alert('移行するデータがありません');
+      hideLoading();
+      return;
+    }
+    
+    // 登録日を追加
+    const now = new Date();
+    const jstDate = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+    const today = jstDate.toISOString().split('T')[0]; // YYYY-MM-DD形式
+    
+    // 移行時に登録日を逆順で設定（古いデータから新しいデータの順にするため）
+    let dateCounter = 0;
+    data.forEach(item => {
+      if (!item.register_date) {
+        // 日付を少しずつ変えて、順番を維持
+        const migrationDate = new Date(jstDate);
+        migrationDate.setDate(migrationDate.getDate() - data.length + dateCounter);
+        item.register_date = migrationDate.toISOString().split('T')[0];
+        dateCounter++;
+      }
+    });
+    
+    // バッチ処理の準備
+    const batchSize = 500; // Firestoreのバッチサイズ制限に注意
+    let succeedCount = 0;
+    
+    for (let i = 0; i < data.length; i += batchSize) {
+      const batch = db.batch();
+      const chunk = data.slice(i, i + batchSize);
+      
+      chunk.forEach(item => {
+        const docRef = db.collection("properties").doc();
+        batch.set(docRef, item);
+      });
+      
+      await batch.commit();
+      succeedCount += chunk.length;
+    }
+    
+    alert(`${succeedCount}件のデータを移行しました`);
+  } catch (error) {
+    console.error("移行エラー:", error);
+    alert('データ移行中にエラーが発生しました: ' + error.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// CSVテンプレートダウンロード
+function downloadCSVTemplate() {
+  const keys = ['種別','物件名','行政区','番地以下','価格','土地面積','建物面積','媒体','業者名','電話番号','販売状況','登録日'];
+  const example = ['土地','○○住宅地','流山市','中央1-2-3','3000','120','90','レインズ','ABC不動産','0120-000-000','販売中','2023-05-18'];
+  
+  const content = keys.join(',') + '\n' + example.join(',');
+  const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'csv_template.csv';
+  a.click();
+}
+
+// 登録物件のCSV出力
+async function exportRegisteredCSV() {
+  showLoading();
+  try {
+    // Firestoreからすべての物件データを取得
+    const snapshot = await db.collection("properties").get();
+    
+    const data = [];
+    snapshot.forEach(doc => {
+      // ドキュメントIDとデータを結合
+      data.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    const headerMap = {
+      'type': '種別',
+      'name': '物件名',
+      'city': '行政区',
+      'address_detail': '番地以下',
+      'price': '価格',
+      'land_area': '土地面積',
+      'building_area': '建物面積',
+      'media': '媒体',
+      'agency': '業者名',
+      'phone': '電話番号',
+      'status': '販売状況',
+      'register_date': '登録日'
+    };
+    
+    const keys = Object.keys(headerMap);
+    const headerRow = keys.map(k => headerMap[k]);
+    
+    const rows = [headerRow.join(',')].concat(
+      data.map(item => keys.map(k => item[k] || '').join(','))
+    );
+    
+    const blob = new Blob(['\uFEFF' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'registered_properties.csv';
+    a.click();
+  } catch (error) {
+    console.error("CSV出力エラー:", error);
+    alert('CSV出力に失敗しました: ' + error.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// チェック済み物件のCSV出力機能
+function exportCheckedCSV() {
+  const checkboxes = document.querySelectorAll('#propertyTable tbody input[type="checkbox"]');
+  const checked = Array.from(checkboxes).filter(cb => cb.checked);
+  
+  if (checked.length === 0) {
+    alert('出力する物件が選択されていません');
+    return;
+  }
+  
+  const selectedData = [];
+  
+  checked.forEach(cb => {
+    const index = parseInt(cb.getAttribute('data-index'));
+    if (filteredData[index]) {
+      selectedData.push(filteredData[index]);
+    }
+  });
+  
+  const headerMap = {
+    'type': '種別',
+    'name': '物件名',
+    'city': '行政区',
+    'address_detail': '番地以下',
+    'price': '価格',
+    'land_area': '土地面積',
+    'building_area': '建物面積',
+    'media': '媒体',
+    'agency': '業者名',
+    'phone': '電話番号',
+    'status': '販売状況'
+  };
+  
+  const keys = Object.keys(headerMap);
+  const headerRow = keys.map(k => headerMap[k]);
+  
+  const rows = [headerRow.join(',')].concat(
+    selectedData.map(item => keys.map(k => item[k] || '').join(','))
+  );
+  
+  const blob = new Blob(['\uFEFF' + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'selected_properties.csv';
+  a.click();
+  
+  alert(`${selectedData.length}件の物件をCSV出力しました`);
+}
+
+// CSV取込み機能
+async function importCSV() {
+  const fileInput = document.getElementById('csvFileInput');
+  const file = fileInput.files[0];
+  
+  if (!file) {
+    alert('ファイルを選択してください');
+    return;
+  }
+  
+  showLoading();
+  const reader = new FileReader();
+  
+  reader.onload = async function(e) {
+    try {
+      const content = e.target.result;
+      const lines = content.trim().split('\n');
+      const headers = lines[0].split(',');
+      
+      const keyMap = {
+        '種別': 'type',
+        '物件名': 'name',
+        '行政区': 'city',
+        '番地以下': 'address_detail',
+        '価格': 'price',
+        '土地面積': 'land_area',
+        '建物面積': 'building_area',
+        '媒体': 'media',
+        '業者名': 'agency',
+        '電話番号': 'phone',
+        '販売状況': 'status',
+        '登録日': 'register_date'
+      };
+      
+      const entries = [];
+      
+      for (let i = 1; i < lines.length; i++) {
+        const values = lines[i].split(',');
+        const obj = {};
+        
+        headers.forEach((header, index) => {
+          const key = keyMap[header.trim()] || header.trim();
+          obj[key] = values[index] ? values[index].trim() : '';
+        });
+        
+        // 登録日が設定されていない場合は現在の日付を設定
+        if (!obj.register_date) {
+          const now = new Date();
+          const jstDate = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+          obj.register_date = jstDate.toISOString().split('T')[0]; // YYYY-MM-DD形式
+        }
+        
+        obj.pdf = '';
+        entries.push(obj);
+      }
+      
+      // バッチ処理で一括登録
+      const batchSize = 500; // Firestoreのバッチサイズ制限
+      let succeedCount = 0;
+      
+      for (let i = 0; i < entries.length; i += batchSize) {
+        const batch = db.batch();
+        const chunk = entries.slice(i, i + batchSize);
+        
+        chunk.forEach(entry => {
+          const docRef = db.collection("properties").doc();
+          batch.set(docRef, entry);
+        });
+        
+        await batch.commit();
+        succeedCount += chunk.length;
+      }
+      
+      alert(`${succeedCount}件のCSVを取り込みました`);
+      fileInput.value = '';
+    } catch (error) {
+      console.error("CSV取込みエラー:", error);
+      alert('CSV取込みに失敗しました: ' + error.message);
+    } finally {
+      hideLoading();
+    }
+  };
+  
+  reader.readAsText(file, 'UTF-8');
+}
+
+// CSV出力（全件）
+function exportCSV() {
+  exportRegisteredCSV(); // 同じ処理を再利用
+}
+
+// 物件検索機能
+async function searchProperties() {
+  showLoading();
+  try {
+    const type = document.getElementById('searchType').value;
+    const city = document.getElementById('searchCity').value;
+    const addressDetail = document.getElementById('searchAddressDetail').value.toLowerCase();
+    const min = parseInt(document.getElementById('searchMin').value) || 0;
+    const max = parseInt(document.getElementById('searchMax').value) || Infinity;
+    const landMin = parseInt(document.getElementById('searchLandMin').value) || 0;
+    const landMax = parseInt(document.getElementById('searchLandMax').value) || Infinity;
+    const media = document.getElementById('searchMedia').value;
+    const status = document.getElementById('searchStatus').value;
+    
+    // Firestoreクエリの構築
+    let query = db.collection("properties");
+    
+    // 厳密一致の条件はFirestoreのクエリで処理
+    if (type) query = query.where("type", "==", type);
+    if (city) query = query.where("city", "==", city);
+    if (media) query = query.where("media", "==", media);
+    if (status) query = query.where("status", "==", status);
+    
+    // クエリを実行
+    const snapshot = await query.get();
+    
+    // 結果をJavaScriptオブジェクトに変換
+    const allData = [];
+    snapshot.forEach(doc => {
+      allData.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    // JavaScript側でのフィルタリング（部分一致や数値範囲など）
+    filteredData = allData.filter(p => {
+      return (!p.price || (parseInt(p.price) >= min && parseInt(p.price) <= max)) &&
+             (!p.land_area || (parseInt(p.land_area) >= landMin && parseInt(p.land_area) <= landMax)) &&
+             (!addressDetail || (p.address_detail && p.address_detail.toLowerCase().includes(addressDetail)));
+    });
+    
+    // 登録日でソート（登録日がない場合は最も古いデータとして扱う）
+    filteredData.sort((a, b) => {
+      // 登録日がない場合は空文字列を設定（最も古いデータとして扱われる）
+      const dateA = a.register_date || '';
+      const dateB = b.register_date || '';
+      // 降順（新しい順）でソート
+      return dateB.localeCompare(dateA);
+    });
+    
+    // ページネーション初期化
+    currentPage = 1;
+    renderPagination();
+    renderPropertyTable();
+  } catch (error) {
+    console.error("検索エラー:", error);
+    alert('検索に失敗しました: ' + error.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// ページネーション描画
+function renderPagination() {
+  const paginationContainer = document.getElementById('pagination');
+  const paginationInfo = document.getElementById('paginationInfo');
+  paginationContainer.innerHTML = '';
+  
+  // 件数表示
+  paginationInfo.textContent = `${filteredData.length}件の物件が見つかりました（${currentPage}ページ目を表示中）`;
+  
+  // ページが必要ない場合は何もしない
+  if (filteredData.length <= itemsPerPage) {
+    return;
+  }
+  
+  const pageCount = Math.ceil(filteredData.length / itemsPerPage);
+  
+  // 「前へ」ボタン
+  if (currentPage > 1) {
+    const prevButton = document.createElement('button');
+    prevButton.textContent = '前へ';
+    prevButton.onclick = () => {
+      currentPage--;
+      renderPagination();
+      renderPropertyTable();
+    };
+    paginationContainer.appendChild(prevButton);
+  }
+  
+  // ページ番号ボタン
+  let startPage = Math.max(1, currentPage - 2);
+  let endPage = Math.min(pageCount, currentPage + 2);
+  
+  // 表示するページ数を最低5つ確保
+  if (endPage - startPage + 1 < 5) {
+    if (currentPage < 3) {
+      endPage = Math.min(pageCount, 5);
+    } else {
+      startPage = Math.max(1, pageCount - 4);
+    }
+  }
+  
+  // 最初のページへ
+  if (startPage > 1) {
+    const firstButton = document.createElement('button');
+    firstButton.textContent = '1';
+    firstButton.onclick = () => {
+      currentPage = 1;
+      renderPagination();
+      renderPropertyTable();
+    };
+    paginationContainer.appendChild(firstButton);
+    
+    if (startPage > 2) {
+      const ellipsis = document.createElement('span');
+      ellipsis.textContent = '...';
+      ellipsis.style.margin = '0 0.5em';
+      paginationContainer.appendChild(ellipsis);
+    }
+  }
+  
+  // ページ番号ボタン生成
+  for (let i = startPage; i <= endPage; i++) {
+    const pageButton = document.createElement('button');
+    pageButton.textContent = i;
+    if (i === currentPage) {
+      pageButton.classList.add('active');
+    }
+    pageButton.onclick = () => {
+      currentPage = i;
+      renderPagination();
+      renderPropertyTable();
+    };
+    paginationContainer.appendChild(pageButton);
+  }
+  
+  // 最後のページへ
+  if (endPage < pageCount) {
+    if (endPage < pageCount - 1) {
+      const ellipsis = document.createElement('span');
+      ellipsis.textContent = '...';
+      ellipsis.style.margin = '0 0.5em';
+      paginationContainer.appendChild(ellipsis);
+    }
+    
+    const lastButton = document.createElement('button');
+    lastButton.textContent = pageCount;
+    lastButton.onclick = () => {
+      currentPage = pageCount;
+      renderPagination();
+      renderPropertyTable();
+    };
+    paginationContainer.appendChild(lastButton);
+  }
+  
+  // 「次へ」ボタン
+  if (currentPage < pageCount) {
+    const nextButton = document.createElement('button');
+    nextButton.textContent = '次へ';
+    nextButton.onclick = () => {
+      currentPage++;
+      renderPagination();
+      renderPropertyTable();
+    };
+    paginationContainer.appendChild(nextButton);
+  }
+}
+
+// テーブル描画関数
+function renderPropertyTable() {
+  const tbody = document.querySelector('#propertyTable tbody');
+  tbody.innerHTML = '';
+  
+  // 現在のページのデータだけを表示
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = Math.min(startIndex + itemsPerPage, filteredData.length);
+  const pageData = filteredData.slice(startIndex, endIndex);
+  
+  pageData.forEach((item, index) => {
+    const row = document.createElement('tr');
+    // data-indexはフィルタリングされたデータの中でのインデックス
+    const dataIndex = startIndex + index;
+    
+    row.innerHTML = `
+      <td><input type="checkbox" data-index="${dataIndex}"></td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'type', this.innerText)">${item.type || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'name', this.innerText)">${item.name || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'city', this.innerText)">${item.city || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'address_detail', this.innerText)">${item.address_detail || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'price', this.innerText)">${item.price || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'land_area', this.innerText)">${item.land_area || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'building_area', this.innerText)">${item.building_area || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'media', this.innerText)">${item.media || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'agency', this.innerText)">${item.agency || ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'phone', this.innerText)">${item.phone || ''}</td>
+      <td>${item.pdf ? '<a href="' + item.pdf + '" download target="_blank">DL</a>' : ''}</td>
+      <td contenteditable onblur="editCell(${dataIndex}, 'status', this.innerText)">${item.status || ''}</td>
+      <td>${item.register_date || ''}</td>
+    `;
+    tbody.appendChild(row);
+  });
+  
+  // ページ情報も更新
+  const paginationInfo = document.getElementById('paginationInfo');
+  paginationInfo.textContent = `${filteredData.length}件の物件が見つかりました（${startIndex + 1}～${endIndex}件目を表示中）`;
+}
+
+// 全選択/解除トグル
+function toggleAll(master) {
+  const checkboxes = document.querySelectorAll('#propertyTable tbody input[type="checkbox"]');
+  checkboxes.forEach(cb => {
+    cb.checked = master.checked;
+  });
+}
+
+// セル編集機能
+async function editCell(index, key, value) {
+  // 変更がない場合は処理しない
+  if (filteredData[index] && filteredData[index][key] === value) {
+    return;
+  }
+  
+  // filteredDataを更新
+  if (filteredData[index]) {
+    const oldValue = filteredData[index][key];
+    filteredData[index][key] = value;
+    
+    const docId = filteredData[index].id;
+    
+    try {
+      showLoading();
+      // Firestoreのデータを更新
+      const updateData = {};
+      updateData[key] = value;
+      
+      await db.collection("properties").doc(docId).update(updateData);
+      console.log("ドキュメントを更新しました");
+    } catch (error) {
+      console.error("更新エラー:", error);
+      // エラーの場合は元の値に戻す
+      filteredData[index][key] = oldValue;
+      alert('更新に失敗しました: ' + error.message);
+      // セルの表示も元に戻す
+      renderPropertyTable();
+    } finally {
+      hideLoading();
+    }
+  }
+}
+
+// 一括ステータス更新
+async function bulkUpdate(newStatus) {
+  const checkboxes = document.querySelectorAll('#propertyTable tbody input[type="checkbox"]');
+  let updateCount = 0;
+  const updates = [];
+  
+  // 更新対象を収集
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      const index = parseInt(cb.getAttribute('data-index'));
+      if (filteredData[index]) {
+        updates.push({
+          docId: filteredData[index].id,
+          item: filteredData[index],
+          newStatus: newStatus
+        });
+      }
+    }
+  });
+  
+  if (updates.length === 0) {
+    alert('更新する物件が選択されていません');
+    return;
+  }
+  
+  showLoading();
+  try {
+    // バッチ更新の準備
+    const batch = db.batch();
+    
+    updates.forEach(update => {
+      const docRef = db.collection("properties").doc(update.docId);
+      batch.update(docRef, { status: update.newStatus });
+      
+      // ローカルのデータも更新
+      update.item.status = update.newStatus;
+    });
+    
+    // バッチ更新を実行
+    await batch.commit();
+    updateCount = updates.length;
+    
+    renderPropertyTable();
+    alert(`${updateCount}件の物件を「${newStatus}」に更新しました`);
+  } catch (error) {
+    console.error("一括更新エラー:", error);
+    alert('更新に失敗しました: ' + error.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// 一括削除
+async function bulkDelete() {
+  if (!confirm('選択した物件を削除しますか？')) {
+    return;
+  }
+  
+  const checkboxes = document.querySelectorAll('#propertyTable tbody input[type="checkbox"]');
+  const deleteItems = [];
+  
+  // 削除対象を収集
+  checkboxes.forEach(cb => {
+    if (cb.checked) {
+      const index = parseInt(cb.getAttribute('data-index'));
+      if (filteredData[index]) {
+        deleteItems.push({
+          docId: filteredData[index].id,
+          item: filteredData[index]
+        });
+      }
+    }
+  });
+  
+  if (deleteItems.length === 0) {
+    alert('削除する物件が選択されていません');
+    return;
+  }
+  
+  showLoading();
+  try {
+    // バッチ削除の準備
+    const batch = db.batch();
+    
+    deleteItems.forEach(item => {
+      const docRef = db.collection("properties").doc(item.docId);
+      batch.delete(docRef);
+    });
+    
+    // バッチ削除を実行
+    await batch.commit();
+    
+    // フィルタリングデータからも削除
+    const deleteIds = deleteItems.map(item => item.docId);
+    filteredData = filteredData.filter(item => !deleteIds.includes(item.id));
+    
+    // ページが存在しなくなった場合は前のページに移動
+    const pageCount = Math.ceil(filteredData.length / itemsPerPage);
+    if (currentPage > pageCount && pageCount > 0) {
+      currentPage = pageCount;
+    } else if (pageCount === 0) {
+      currentPage = 1;
+    }
+    
+    renderPagination();
+    renderPropertyTable();
+    alert(`${deleteItems.length}件の物件を削除しました`);
+  } catch (error) {
+    console.error("一括削除エラー:", error);
+    alert('削除に失敗しました: ' + error.message);
+  } finally {
+    hideLoading();
+  }
+}
+
+// ページ読み込み時に初期化
+window.onload = function() {
+  // ローディング表示を隠す
+  hideLoading();
+  
+  // Firebase初期化
+  if (!initializeFirebase()) {
+    return; // 初期化失敗の場合は処理を中断
+  }
+  
+  // ショートカットキー設定
+  document.addEventListener('keydown', function(e) {
+    // Ctrl+Fで検索タブへ
+    if (e.ctrlKey && e.key === 'f') {
+      e.preventDefault();
+      switchTab(1);
+      document.getElementById('searchAddressDetail').focus();
+    }
+    
+    // Ctrl+Nで登録タブへ
+    if (e.ctrlKey && e.key === 'n') {
+      e.preventDefault();
+      switchTab(0);
+      document.querySelector('#propertyForm input[name="name"]').focus();
+    }
+  });
+  
+  // Firebase接続テスト
+  db.collection("properties").limit(1).get()
+    .then(snapshot => {
+      console.log("Firebase接続成功");
+      
+      // 接続成功後、登録日が存在しないレコードを修正
+      updateMissingRegisterDates();
+      
+      // 検索タブでアクセスした場合、すべての物件を表示
+      if (document.querySelector('.tab button:nth-child(2)').classList.contains('active')) {
+        searchProperties();
+      }
+    })
+    .catch(error => {
+      console.error("Firebase接続エラー:", error);
+      alert("Firebaseデータベースへの接続に失敗しました。ネットワーク接続を確認してください。エラー: " + error.message);
+    });
+};
+
+// 登録日が設定されていないレコードを修正
+async function updateMissingRegisterDates() {
+  try {
+    // 登録日が設定されていないレコードを検索
+    const snapshot = await db.collection("properties")
+      .where("register_date", "==", null)
+      .get();
+      
+    if (snapshot.empty) {
+      console.log("登録日が未設定のレコードはありません");
+      return;
+    }
+    
+    console.log(`${snapshot.size}件の登録日未設定レコードを修正します`);
+    
+    // 現在の日時を取得（JST）
+    const now = new Date();
+    const jstDate = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+    const today = jstDate.toISOString().split('T')[0]; // YYYY-MM-DD形式
+    
+    // バッチ処理で一括更新
+    const batchSize = 500;
+    let count = 0;
+    let batch = db.batch();
+    
+    snapshot.forEach((doc, index) => {
+      batch.update(doc.ref, { register_date: today });
+      count++;
+      
+      // バッチサイズに達したらコミット
+      if (count % batchSize === 0) {
+        batch.commit();
+        batch = db.batch();
+      }
+    });
+    
+    // 残りのバッチをコミット
+    if (count % batchSize > 0) {
+      await batch.commit();
+    }
+    
+    console.log(`${count}件の登録日を更新しました`);
+  } catch (error) {
+    console.error("登録日更新エラー:", error);
+  }
+}
+</script>
+</body>
+</html>
